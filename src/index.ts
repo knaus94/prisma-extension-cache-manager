@@ -158,7 +158,7 @@ function shouldUseUncache(uncacheOption: any): boolean {
  * @param config - Конфигурация для кеша Redis и TTL по умолчанию.
  * @returns Prisma расширение.
  */
-export default ({ cache, defaultTTL, debug }: PrismaRedisCacheConfig) => {
+export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
   return Prisma.defineExtension({
     name: "prisma-extension-cache-manager",
     client: {
@@ -223,7 +223,7 @@ export default ({ cache, defaultTTL, debug }: PrismaRedisCacheConfig) => {
 
             // Если cacheOption — число, оно означает TTL
             ttl =
-              typeof cacheOption === "number" ? cacheOption : defaultTTL ?? 0;
+              typeof cacheOption === "number" ? cacheOption : globalTTL ?? 0;
           }
           // 2b) Если cacheOption — объект с key: function,
           //     нужно сначала сделать запрос к БД, чтобы функция могла сгенерировать ключ
@@ -238,7 +238,7 @@ export default ({ cache, defaultTTL, debug }: PrismaRedisCacheConfig) => {
 
             // Функция генерирует ключ на основе результатов
             cacheKey = cacheOption.key(result);
-            ttl = cacheOption.ttl ?? defaultTTL ?? 0;
+            ttl = cacheOption.ttl ?? globalTTL ?? 0;
 
             // Сохраняем результат в кеш, используя msgpack5
             try {
@@ -276,7 +276,7 @@ export default ({ cache, defaultTTL, debug }: PrismaRedisCacheConfig) => {
               createKey(cacheOption.key, cacheOption.namespace) ||
               generateComposedKey({ model, queryArgs });
 
-            ttl = cacheOption.ttl ?? defaultTTL;
+            ttl = cacheOption.ttl ?? globalTTL;
           }
 
           // 3. Если это операция чтения, пробуем вернуть данные из кеша
