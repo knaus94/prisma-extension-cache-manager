@@ -120,7 +120,6 @@ async function processUncache(
   if (keysToDelete.length === 0) return true;
 
   try {
-    // mdel — это ваш кастомный метод в store для массового удаления ключей.
     await cache.store.mdel(...keysToDelete);
     return true;
   } catch (error) {
