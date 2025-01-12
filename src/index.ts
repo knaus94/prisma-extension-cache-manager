@@ -73,7 +73,7 @@ function createKey(key: string, namespace?: string): string {
 }
 
 function serialize(data: any) {
-  return mp.encode(data).slice();
+  return mp.encode(data);
 }
 
 function deserialize(buffer: Buffer) {
