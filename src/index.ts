@@ -67,14 +67,14 @@ function createKey(key: string, namespace?: string): string {
 }
 
 /**
- * Сериализация данных с помощью msgpack-lite.
+ * Сериализация данных
  */
 function serialize(data) {
   return encode(data, { codec });
 }
 
 /**
- * Десериализация данных с помощью msgpack-lite.
+ * Десериализация данных
  */
 function deserialize(buffer: Buffer) {
   return decode(buffer, { codec });
