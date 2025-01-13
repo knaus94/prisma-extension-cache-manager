@@ -244,14 +244,14 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
             }
 
             if (ttl) {
-              ttl = Math.ceil(ttl);
+              ttl = Math.ceil(ttl / 1000);
             }
 
             // Сохраняем результат в кеш
             try {
               const encoded = serialize(result);
               await (ttl && ttl > 0
-                ? cache.store.client.set(cacheKey, encoded, "EX", ttl / 1000)
+                ? cache.store.client.set(cacheKey, encoded, "EX", ttl)
                 : cache.store.client.set(cacheKey, encoded));
               if (debug) {
                 console.log(
@@ -323,14 +323,14 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
           }
 
           if (ttl) {
-            ttl = Math.ceil(ttl);
+            ttl = Math.ceil(ttl / 1000);
           }
 
           // 6. Сохраняем результат запроса в кеш
           try {
             const encoded = serialize(result);
             await (ttl && ttl > 0
-              ? cache.store.client.set(cacheKey, encoded, "EX", ttl / 1000)
+              ? cache.store.client.set(cacheKey, encoded, "EX", ttl)
               : cache.store.client.set(cacheKey, encoded));
             if (debug) {
               console.log(
