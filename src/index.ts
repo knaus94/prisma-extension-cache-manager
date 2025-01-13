@@ -6,16 +6,16 @@ import {
 import { createHash } from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Prisma } from "@prisma/client/extension";
-
-import msgpack from "msgpack-lite";
+import { createCodec, encode, decode } from "msgpack-lite";
 
 /**
  * Создаем codec
  * В дальнейшем используем его encode/decode для сериализации/десериализации.
  */
-const codec = msgpack.createCodec();
+const codec = createCodec();
 
-const TYPE_DECIMAL = 0x21;
+const TYPE_DECIMAL = 0x07;
+const TYPE_DATE = 0x0d;
 
 /**
  * Регистрируем тип `Decimal`.
@@ -27,6 +27,18 @@ codec.addExtPacker(TYPE_DECIMAL, Decimal, (decimal) => {
 });
 codec.addExtUnpacker(TYPE_DECIMAL, (buffer) => {
   return new Decimal(buffer.toString());
+});
+
+/**
+ * Регистрируем тип `Date`.
+ * - При кодировании превращаем `Date` в строку.
+ * - При декодировании восстанавливаем обратно в `Date`.
+ */
+codec.addExtPacker(TYPE_DATE, Date, (date) => {
+  return Buffer.from(date.toISOString());
+});
+codec.addExtUnpacker(TYPE_DATE, (buffer) => {
+  return new Date(buffer.toString());
 });
 
 /**
@@ -57,15 +69,15 @@ function createKey(key: string, namespace?: string): string {
 /**
  * Сериализация данных с помощью msgpack-lite.
  */
-function serialize(data: any) {
-  return msgpack.encode(data, { codec });
+function serialize(data) {
+  return encode(data, { codec });
 }
 
 /**
  * Десериализация данных с помощью msgpack-lite.
  */
 function deserialize(buffer: Buffer) {
-  return msgpack.decode(buffer, { codec });
+  return decode(buffer, { codec });
 }
 
 /**
@@ -146,7 +158,7 @@ function shouldUseUncache(uncacheOption: any): boolean {
  * @param config - Конфигурация для кеша Redis и TTL по умолчанию.
  * @returns Prisma расширение.
  */
-export default ({ cache, debug }: PrismaRedisCacheConfig) => {
+export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
   return Prisma.defineExtension({
     name: "prisma-extension-cache-manager",
     client: {
@@ -227,10 +239,16 @@ export default ({ cache, debug }: PrismaRedisCacheConfig) => {
             cacheKey = cacheOption.key(result);
             ttl = cacheOption.ttl;
 
+            if (ttl === undefined) {
+              ttl = defaultTTL;
+            }
+
             // Сохраняем результат в кеш
             try {
               const encoded = serialize(result);
-              await cache.set(cacheKey, encoded);
+              await (ttl && ttl > 0
+                ? cache.store.client.set(cacheKey, encoded, "EX", ttl / 1000)
+                : cache.store.client.set(cacheKey, encoded));
               if (debug) {
                 console.log(
                   "Data cached with key (function):",
@@ -262,7 +280,7 @@ export default ({ cache, debug }: PrismaRedisCacheConfig) => {
           if (!isWriteOperation) {
             try {
               // Используем getBuffer, т.к. сохраняем бинарные данные
-              const cached = await cache.get<Buffer>(cacheKey);
+              const cached = await cache.store.client.getBuffer(cacheKey);
               if (cached) {
                 const data = deserialize(cached);
                 if (debug) {
@@ -296,10 +314,16 @@ export default ({ cache, debug }: PrismaRedisCacheConfig) => {
             await processUncache(cache, uncacheOption, result);
           }
 
+          if (ttl === undefined) {
+            ttl = defaultTTL;
+          }
+
           // 6. Сохраняем результат запроса в кеш
           try {
             const encoded = serialize(result);
-            await cache.set(cacheKey, encoded, ttl);
+            await (ttl && ttl > 0
+              ? cache.store.client.set(cacheKey, encoded, "EX", ttl / 1000)
+              : cache.store.client.set(cacheKey, encoded));
             if (debug) {
               console.log(
                 "Data cached with key:",

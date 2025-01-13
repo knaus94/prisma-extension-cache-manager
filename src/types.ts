@@ -84,4 +84,5 @@ export interface PrismaCacheArgs<
 export interface PrismaRedisCacheConfig {
   cache: RedisCache;
   debug?: boolean;
+  ttl?: number;
 }
