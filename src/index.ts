@@ -243,6 +243,10 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
               ttl = defaultTTL;
             }
 
+            if (ttl) {
+              ttl = Math.ceil(ttl);
+            }
+
             // Сохраняем результат в кеш
             try {
               const encoded = serialize(result);
@@ -316,6 +320,10 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
 
           if (ttl === undefined) {
             ttl = defaultTTL;
+          }
+
+          if (ttl) {
+            ttl = Math.ceil(ttl);
           }
 
           // 6. Сохраняем результат запроса в кеш
