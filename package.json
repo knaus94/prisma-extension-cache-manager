@@ -1,6 +1,6 @@
 {
   "name": "@knaus94/prisma-extension-cache-manager",
-  "version": "1.5.62",
+  "version": "1.5.63",
   "repository": {
     "type": "git",
     "url": "https://github.com/knaus94/prisma-extension-cache-manager.git"
@@ -40,7 +40,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "devDependencies": {
-    "@types/msgpack5": "^3.4.6",
+    "@types/msgpack-lite": "^0.1.11",
     "@types/node": "^20.10.6",
     "prettier": "^3.1.1",
     "rimraf": "^5.0.5",
@@ -55,9 +55,9 @@
     ]
   },
   "dependencies": {
-    "msgpack5": "^6.0.2",
     "@prisma/client": "^5.7.1",
     "cache-manager": "^5.2.3",
-    "cache-manager-ioredis-yet": "^2.1.1"
+    "cache-manager-ioredis-yet": "^2.1.1",
+    "msgpack-lite": "^0.1.26"
   }
 }

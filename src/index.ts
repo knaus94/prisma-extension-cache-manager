@@ -7,45 +7,27 @@ import { createHash } from "crypto";
 import { Decimal } from "@prisma/client/runtime/library";
 import { Prisma } from "@prisma/client/extension";
 
-// Импорт msgpack5
-import msgpack5 from "msgpack5";
+import msgpack from "msgpack-lite";
 
 /**
- * Создаем экземпляр msgpack5.
+ * Создаем codec
  * В дальнейшем используем его encode/decode для сериализации/десериализации.
  */
-const mp = msgpack5();
+const codec = msgpack.createCodec();
 
-/**
- * Уникальные коды (type) для регистрации пользовательских типов
- * в MessagePack. Убедитесь, что числа не конфликтуют с другими типами.
- */
-const TYPE_DATE = 0x01;
-const TYPE_DECIMAL = 0x02;
-
-/**
- * Регистрируем тип `Date`.
- * - При кодировании превращаем `Date` в строку (ISO).
- * - При декодировании восстанавливаем из строки обратно в `Date`.
- */
-mp.register(
-  TYPE_DATE,
-  Date,
-  (date: Date) => Buffer.from(date.toISOString()), // encode
-  (buffer: Buffer) => new Date(buffer.toString()) // decode
-);
+const TYPE_DECIMAL = 0x21;
 
 /**
  * Регистрируем тип `Decimal`.
  * - При кодировании превращаем `Decimal` в строку.
  * - При декодировании восстанавливаем обратно в `Decimal`.
  */
-mp.register(
-  TYPE_DECIMAL,
-  Decimal,
-  (decimal: Decimal) => Buffer.from(decimal.toString()), // encode
-  (buffer: Buffer) => new Decimal(buffer.toString()) // decode
-);
+codec.addExtPacker(TYPE_DECIMAL, Decimal, (decimal) => {
+  return Buffer.from(decimal.toString());
+});
+codec.addExtUnpacker(TYPE_DECIMAL, (buffer) => {
+  return new Decimal(buffer.toString());
+});
 
 /**
  * Генерирует уникальный ключ для кеширования на основе модели и аргументов запроса.
@@ -72,12 +54,18 @@ function createKey(key: string, namespace?: string): string {
   return namespace ? `${namespace}:${key}` : key;
 }
 
+/**
+ * Сериализация данных с помощью msgpack-lite.
+ */
 function serialize(data: any) {
-  return mp.encode(data).slice();
+  return msgpack.encode(data, { codec });
 }
 
+/**
+ * Десериализация данных с помощью msgpack-lite.
+ */
 function deserialize(buffer: Buffer) {
-  return mp.decode(buffer);
+  return msgpack.decode(buffer, { codec });
 }
 
 /**
@@ -158,7 +146,7 @@ function shouldUseUncache(uncacheOption: any): boolean {
  * @param config - Конфигурация для кеша Redis и TTL по умолчанию.
  * @returns Prisma расширение.
  */
-export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
+export default ({ cache, debug }: PrismaRedisCacheConfig) => {
   return Prisma.defineExtension({
     name: "prisma-extension-cache-manager",
     client: {
@@ -212,7 +200,7 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
 
           // 2. Генерируем ключ кеша + TTL
           let cacheKey: string;
-          let ttl: number;
+          let ttl: number | undefined;
 
           // 2a) Простые варианты cacheOption (true, число, строка)
           if (["boolean", "number", "string"].includes(typeof cacheOption)) {
@@ -222,8 +210,7 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
                 : generateComposedKey({ model, queryArgs }); // Иначе генерируем ключ
 
             // Если cacheOption — число, оно означает TTL
-            ttl =
-              typeof cacheOption === "number" ? cacheOption : globalTTL ?? 0;
+            ttl = typeof cacheOption === "number" ? cacheOption : undefined;
           }
           // 2b) Если cacheOption — объект с key: function,
           //     нужно сначала сделать запрос к БД, чтобы функция могла сгенерировать ключ
@@ -238,26 +225,18 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
 
             // Функция генерирует ключ на основе результатов
             cacheKey = cacheOption.key(result);
-            ttl = cacheOption.ttl ?? globalTTL ?? 0;
+            ttl = cacheOption.ttl;
 
-            // Сохраняем результат в кеш, используя msgpack5
+            // Сохраняем результат в кеш
             try {
-              if (ttl > 0) {
-                await cache.store.client.set(
-                  cacheKey,
-                  serialize(result),
-                  "EX",
-                  ttl / 1000
-                );
-              } else {
-                await cache.store.client.set(cacheKey, serialize(result));
-              }
+              const encoded = serialize(result);
+              await cache.set(cacheKey, encoded);
               if (debug) {
                 console.log(
                   "Data cached with key (function):",
                   cacheKey,
                   "encoded:",
-                  serialize(result),
+                  encoded,
                   "decoded:",
                   result
                 );
@@ -270,20 +249,20 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
 
             return result;
           }
-          // 2c) Иначе берем ключ/namespace/ttl из объекта
+          // 2c) Иначе берём ключ/namespace/ttl из объекта
           else {
             cacheKey =
               createKey(cacheOption.key, cacheOption.namespace) ||
               generateComposedKey({ model, queryArgs });
 
-            ttl = cacheOption.ttl ?? globalTTL;
+            ttl = cacheOption.ttl;
           }
 
           // 3. Если это операция чтения, пробуем вернуть данные из кеша
           if (!isWriteOperation) {
             try {
               // Используем getBuffer, т.к. сохраняем бинарные данные
-              const cached = await cache.store.client.getBuffer(cacheKey);
+              const cached = await cache.get<Buffer>(cacheKey);
               if (cached) {
                 const data = deserialize(cached);
                 if (debug) {
@@ -296,7 +275,6 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
                     data
                   );
                 }
-                // Десериализуем через msgpack5
                 return data;
               } else {
                 if (debug) {
@@ -320,18 +298,14 @@ export default ({ cache, globalTTL, debug }: PrismaRedisCacheConfig) => {
 
           // 6. Сохраняем результат запроса в кеш
           try {
-            const data = serialize(result);
-            if (ttl > 0) {
-              await cache.store.client.set(cacheKey, data, "EX", ttl / 1000);
-            } else {
-              await cache.store.client.set(cacheKey, data);
-            }
+            const encoded = serialize(result);
+            await cache.set(cacheKey, encoded, ttl);
             if (debug) {
               console.log(
                 "Data cached with key:",
                 cacheKey,
                 "encoded:",
-                data,
+                encoded,
                 "decoded:",
                 result
               );
