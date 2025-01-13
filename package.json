@@ -59,5 +59,10 @@
     "cache-manager": "^5.2.3",
     "cache-manager-ioredis-yet": "^2.1.1",
     "msgpack-lite": "^0.1.26"
+  },
+  "peerDependencies": {
+    "@nestjs/cache-manager": "^1.0.0",
+    "cache-manager": "^5.2.0",
+    "cache-manager-ioredis-yet": "^2.1.1"
   }
 }
