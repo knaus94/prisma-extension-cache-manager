@@ -6,6 +6,7 @@ A caching extension for [Prisma](https://www.prisma.io/), compatible with [cache
 
 - [cache-manager](https://www.npmjs.com/package/cache-manager) compatibility
 - Only model queries can be cacheable (no $query or $queryRaw)
+- Supported Decimal
 
 ## Installation
 
