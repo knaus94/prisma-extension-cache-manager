@@ -14,7 +14,7 @@ import { createCodec, encode, decode } from "msgpack-lite";
  */
 const codec = createCodec();
 
-const TYPE_DECIMAL = 0x07;
+const TYPE_DECIMAL = 0x3F;
 const TYPE_DATE = 0x0d;
 
 /**
@@ -23,10 +23,10 @@ const TYPE_DATE = 0x0d;
  * - При декодировании восстанавливаем обратно в `Decimal`.
  */
 codec.addExtPacker(TYPE_DECIMAL, Decimal, (decimal) => {
-  return Buffer.from(decimal.toString());
+  return encode(decimal.toString());
 });
 codec.addExtUnpacker(TYPE_DECIMAL, (buffer) => {
-  return new Decimal(buffer.toString());
+  return new Decimal(decode(buffer));
 });
 
 /**
@@ -35,10 +35,10 @@ codec.addExtUnpacker(TYPE_DECIMAL, (buffer) => {
  * - При декодировании восстанавливаем обратно в `Date`.
  */
 codec.addExtPacker(TYPE_DATE, Date, (date) => {
-  return Buffer.from(date.toISOString());
+  return encode(date.toISOString());
 });
 codec.addExtUnpacker(TYPE_DATE, (buffer) => {
-  return new Date(buffer.toString());
+  return new Date(decode(buffer));
 });
 
 /**
