@@ -1,6 +1,6 @@
 import { Operation } from "@prisma/client/runtime/library";
 import { Prisma } from "@prisma/client/extension";
-import { RedisCache } from "cache-manager-ioredis-yet";
+import { Cache } from "cache-manager";
 
 export const REQUIRED_ARGS_OPERATIONS = [
   "delete",
@@ -82,7 +82,7 @@ export interface PrismaCacheArgs<
 }
 
 export interface PrismaRedisCacheConfig {
-  cache: RedisCache;
+  cache: Cache;
   debug?: boolean;
   ttl?: number;
 }

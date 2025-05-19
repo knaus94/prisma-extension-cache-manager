@@ -4,47 +4,10 @@ import {
   PrismaRedisCacheConfig,
 } from "./types";
 import { createHash } from "crypto";
-import { Decimal } from "@prisma/client/runtime/library";
 import { Prisma } from "@prisma/client/extension";
-import { createCodec, encode, decode } from "msgpack-lite";
 
 /**
- * Создаем codec
- * В дальнейшем используем его encode/decode для сериализации/десериализации.
- */
-const codec = createCodec();
-
-const TYPE_DECIMAL = 0x3F;
-const TYPE_DATE = 0x0d;
-
-/**
- * Регистрируем тип `Decimal`.
- * - При кодировании превращаем `Decimal` в строку.
- * - При декодировании восстанавливаем обратно в `Decimal`.
- */
-codec.addExtPacker(TYPE_DECIMAL, Decimal, (decimal) => {
-  return encode(decimal.toString());
-});
-codec.addExtUnpacker(TYPE_DECIMAL, (buffer) => {
-  return new Decimal(decode(buffer));
-});
-
-/**
- * Регистрируем тип `Date`.
- * - При кодировании превращаем `Date` в строку.
- * - При декодировании восстанавливаем обратно в `Date`.
- */
-codec.addExtPacker(TYPE_DATE, Date, (date) => {
-  return encode(date.toISOString());
-});
-codec.addExtUnpacker(TYPE_DATE, (buffer) => {
-  return new Date(decode(buffer));
-});
-
-/**
- * Генерирует уникальный ключ для кеширования на основе модели и аргументов запроса.
- * @param options - Опции для генерации ключа.
- * @returns Сгенерированный ключ.
+ * Produce a stable cache key from model name and query arguments.
  */
 function generateComposedKey(options: {
   model: string;
@@ -57,35 +20,14 @@ function generateComposedKey(options: {
 }
 
 /**
- * Создаёт ключ с опциональным пространством имен.
- * @param key - Основной ключ.
- * @param namespace - Пространство имен.
- * @returns Полный ключ с пространством имен, если оно указано.
+ * Prefix the key with a namespace (if present).
  */
 function createKey(key: string, namespace?: string): string {
   return namespace ? `${namespace}:${key}` : key;
 }
 
 /**
- * Сериализация данных
- */
-function serialize(data) {
-  return encode(data, { codec });
-}
-
-/**
- * Десериализация данных
- */
-function deserialize(buffer: Buffer) {
-  return decode(buffer, { codec });
-}
-
-/**
- * Обрабатывает удаление ключей из кеша после операций записи.
- * @param cache - Кеш-менеджер.
- * @param uncacheOption - Опции удаления кеша.
- * @param result - Результат операции.
- * @returns Promise<boolean> указывающий на успешность удаления.
+ * Delete keys from cache after a write operation.
  */
 async function processUncache(
   cache: any,
@@ -94,23 +36,15 @@ async function processUncache(
 ): Promise<boolean> {
   let keysToDelete: string[] = [];
 
-  // 1) Если uncacheOption — функция, она может вернуть ключ(и) для удаления.
   if (typeof uncacheOption === "function") {
     const keys = uncacheOption(result);
     keysToDelete = Array.isArray(keys) ? keys : [keys];
-  }
-  // 2) Если строка — просто один ключ.
-  else if (typeof uncacheOption === "string") {
+  } else if (typeof uncacheOption === "string") {
     keysToDelete = [uncacheOption];
-  }
-  // 3) Если массив:
-  else if (Array.isArray(uncacheOption)) {
-    // 3a) Простой массив строк.
+  } else if (Array.isArray(uncacheOption)) {
     if (typeof uncacheOption[0] === "string") {
       keysToDelete = uncacheOption;
-    }
-    // 3b) Массив объектов { namespace, key }.
-    else if (typeof uncacheOption[0] === "object") {
+    } else if (typeof uncacheOption[0] === "object") {
       keysToDelete = uncacheOption.map((obj: any) =>
         obj.namespace ? `${obj.namespace}:${obj.key}` : obj.key
       );
@@ -120,49 +54,34 @@ async function processUncache(
   if (keysToDelete.length === 0) return true;
 
   try {
-    await cache.store.mdel(...keysToDelete);
+    await cache.mdel(keysToDelete);
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }
 
 /**
- * Определяет, следует ли использовать кеширование для текущей операции.
- * @param cacheOption - Опции кеширования.
- * @returns boolean указывающий, использовать ли кеш.
+ * Decide whether cache option is valid.
  */
-function shouldUseCache(cacheOption: any): boolean {
-  return (
-    cacheOption !== undefined &&
-    ["boolean", "object", "number", "string"].includes(typeof cacheOption)
-  );
-}
+const shouldUseCache = (opt: any) =>
+  opt !== undefined &&
+  ["boolean", "object", "number", "string"].includes(typeof opt);
 
 /**
- * Определяет, следует ли использовать удаление из кеша для текущей операции.
- * @param uncacheOption - Опции удаления кеша.
- * @returns boolean указывающий, использовать ли удаление кеша.
+ * Decide whether uncache option is valid.
  */
-function shouldUseUncache(uncacheOption: any): boolean {
-  return (
-    uncacheOption !== undefined &&
-    (typeof uncacheOption === "function" ||
-      typeof uncacheOption === "string" ||
-      Array.isArray(uncacheOption))
-  );
-}
+const shouldUseUncache = (opt: any) =>
+  opt !== undefined &&
+  (typeof opt === "function" || typeof opt === "string" || Array.isArray(opt));
 
 /**
- * Основная функция расширения Prisma для управления кешированием с использованием Redis.
- * @param config - Конфигурация для кеша Redis и TTL по умолчанию.
- * @returns Prisma расширение.
+ * Prisma extension that adds transparent Redis caching.
  */
-export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
-  return Prisma.defineExtension({
+export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) =>
+  Prisma.defineExtension({
     name: "prisma-extension-cache-manager",
     client: {
-      // Делаем кеш доступным в клиенте через $cache
       $cache: cache,
     },
     model: {
@@ -170,19 +89,12 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
     },
     query: {
       $allModels: {
-        /**
-         * Обрабатывает все операции моделей, добавляя логику кеширования.
-         * @param params - Параметры операции.
-         * @returns Результат операции, возможно из кеша.
-         */
         async $allOperations({ model, operation, args, query }) {
-          // Проверяем, относится ли операция к кешируемым
           if (!(CACHE_OPERATIONS as unknown as string[]).includes(operation)) {
             return query(args);
           }
 
-          // Операции, при которых данные в БД меняются
-          const isWriteOperation = [
+          const isWriteOp = [
             "create",
             "createMany",
             "updateMany",
@@ -190,7 +102,6 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
             "update",
           ].includes(operation);
 
-          // Извлекаем специальные поля cache / uncache (если есть)
           const {
             cache: cacheOption,
             uncache: uncacheOption,
@@ -200,157 +111,79 @@ export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) => {
           const useCache = shouldUseCache(cacheOption);
           const useUncache = shouldUseUncache(uncacheOption);
 
-          // 1. Если кеш не нужен, просто выполняем запрос и,
-          //    при необходимости, очищаем кеш (uncache).
+          // --- No cache requested -----------------------------------------
           if (!useCache) {
-            const result = await query(queryArgs);
-            if (useUncache) {
-              await processUncache(cache, uncacheOption, result);
-            }
-            return result;
+            const res = await query(queryArgs);
+            if (useUncache) await processUncache(cache, uncacheOption, res);
+            return res;
           }
 
-          // 2. Генерируем ключ кеша + TTL
+          // --- Build key & ttl --------------------------------------------
           let cacheKey: string;
           let ttl: number | undefined;
 
-          // 2a) Простые варианты cacheOption (true, число, строка)
           if (["boolean", "number", "string"].includes(typeof cacheOption)) {
             cacheKey =
               typeof cacheOption === "string"
-                ? cacheOption // Если cacheOption — строка, используем её как ключ напрямую
-                : generateComposedKey({ model, queryArgs }); // Иначе генерируем ключ
+                ? cacheOption
+                : generateComposedKey({ model, queryArgs });
 
-            // Если cacheOption — число, оно означает TTL
             ttl = typeof cacheOption === "number" ? cacheOption : undefined;
-          }
-          // 2b) Если cacheOption — объект с key: function,
-          //     нужно сначала сделать запрос к БД, чтобы функция могла сгенерировать ключ
-          else if (typeof cacheOption.key === "function") {
-            // Выполняем запрос к базе
-            const result = await query(queryArgs);
+          } else if (typeof cacheOption.key === "function") {
+            // Key depends on DB result – run query first
+            const res = await query(queryArgs);
+            if (useUncache) await processUncache(cache, uncacheOption, res);
 
-            // Если нужно, удаляем из кеша
-            if (useUncache) {
-              await processUncache(cache, uncacheOption, result);
+            cacheKey = cacheOption.key(res);
+            ttl = cacheOption.ttl ?? defaultTTL;
+
+            if (ttl && ttl > 0) {
+              await cache.set(cacheKey, res, Math.ceil(ttl / 1000));
+            } else {
+              await cache.set(cacheKey, res);
             }
-
-            // Функция генерирует ключ на основе результатов
-            cacheKey = cacheOption.key(result);
-            ttl = cacheOption.ttl;
-
-            if (ttl === undefined) {
-              ttl = defaultTTL;
-            }
-
-            if (ttl) {
-              ttl = Math.ceil(ttl / 1000);
-            }
-
-            // Сохраняем результат в кеш
-            try {
-              const encoded = serialize(result);
-              await (ttl && ttl > 0
-                ? cache.store.client.set(cacheKey, encoded, "EX", ttl)
-                : cache.store.client.set(cacheKey, encoded));
-              if (debug) {
-                console.log(
-                  "Data cached with key (function):",
-                  cacheKey,
-                  "encoded:",
-                  encoded,
-                  "decoded:",
-                  result
-                );
-              }
-            } catch (e) {
-              if (debug) {
-                console.error("Failed to set cache", e);
-              }
-            }
-
-            return result;
-          }
-          // 2c) Иначе берём ключ/namespace/ttl из объекта
-          else {
+            if (debug) console.log("Data cached (fn key):", cacheKey);
+            return res;
+          } else {
             cacheKey =
               createKey(cacheOption.key, cacheOption.namespace) ||
               generateComposedKey({ model, queryArgs });
-
             ttl = cacheOption.ttl;
           }
 
-          // 3. Если это операция чтения, пробуем вернуть данные из кеша
-          if (!isWriteOperation) {
+          // --- Try cache for read ops -------------------------------------
+          if (!isWriteOp) {
             try {
-              // Используем getBuffer, т.к. сохраняем бинарные данные
-              const cached = await cache.store.client.getBuffer(cacheKey);
-              if (cached) {
-                const data = deserialize(cached);
-                if (debug) {
-                  console.log(
-                    "Cache hit for key:",
-                    cacheKey,
-                    "data",
-                    cached,
-                    "decoded",
-                    data
-                  );
-                }
-                return data;
-              } else {
-                if (debug) {
-                  console.log("Cache miss for key:", cacheKey);
-                }
+              const cached = await cache.get(cacheKey);
+              if (cached !== undefined && cached !== null) {
+                if (debug) console.log("Cache hit:", cacheKey);
+                return cached;
               }
+              if (debug) console.log("Cache miss:", cacheKey);
             } catch (e) {
-              if (debug) {
-                console.error("Failed to get cache", e);
-              }
+              if (debug) console.error("Cache get failed", e);
             }
           }
 
-          // 4. Выполняем запрос к БД (операция чтения или записи)
-          const result = await query(queryArgs);
+          // --- Fallback to DB ---------------------------------------------
+          const res = await query(queryArgs);
 
-          // 5. Если нужно, удаляем ключи из кеша
-          if (useUncache) {
-            await processUncache(cache, uncacheOption, result);
-          }
+          if (useUncache) await processUncache(cache, uncacheOption, res);
 
-          if (ttl === undefined) {
-            ttl = defaultTTL;
-          }
-
-          if (ttl) {
-            ttl = Math.ceil(ttl / 1000);
-          }
-
-          // 6. Сохраняем результат запроса в кеш
+          ttl = ttl ?? defaultTTL;
           try {
-            const encoded = serialize(result);
-            await (ttl && ttl > 0
-              ? cache.store.client.set(cacheKey, encoded, "EX", ttl)
-              : cache.store.client.set(cacheKey, encoded));
-            if (debug) {
-              console.log(
-                "Data cached with key:",
-                cacheKey,
-                "encoded:",
-                encoded,
-                "decoded:",
-                result
-              );
+            if (ttl && ttl > 0) {
+              await cache.set(cacheKey, res, Math.ceil(ttl / 1000));
+            } else {
+              await cache.set(cacheKey, res);
             }
+            if (debug) console.log("Data cached:", cacheKey);
           } catch (e) {
-            if (debug) {
-              console.error("Failed to set cache", e);
-            }
+            if (debug) console.error("Cache set failed", e);
           }
 
-          return result;
+          return res;
         },
       },
     },
   });
-};
