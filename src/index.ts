@@ -1,32 +1,35 @@
+import { hash } from "object-code";
 import {
   CACHE_OPERATIONS,
   ModelExtension,
   PrismaRedisCacheConfig,
 } from "./types";
-import { hash } from "object-code";
 import { Prisma } from "@prisma/client/extension";
 
 /* helpers -------------------------------------------------------------- */
-const hashKey = (m: string, a: any) => `${m}@${hash(a)}`;
-const ns = (k: string, n?: string) => (n ? `${n}:${k}` : k);
-const WRITE_OPS = new Set([
-  "create",
-  "createMany",
-  "updateMany",
-  "upsert",
-  "update",
-]);
+const composedKey = (m: string, a: any) => `${m}@${hash(a)}`;
 
+const ns = (k: string, n?: string) => (n ? `${n}:${k}` : k);
+
+const isWrite = (op: string) =>
+  ["create", "createMany", "updateMany", "upsert", "update"].includes(op);
+
+/* uncache → массив строк */
 const toUncache = (opt: any, res: any): string[] =>
   !opt
     ? []
     : typeof opt === "function"
-      ? Array(opt(res))
+      ? ([] as string[]).concat(opt(res))
       : typeof opt === "string"
         ? [opt]
         : opt.map((o: any) =>
             typeof o === "string" ? o : ns(o.key, o.namespace)
           );
+
+const processUncache = async (cache: any, opt: any, res: any) => {
+  const keys = toUncache(opt, res);
+  if (keys.length) await cache.mdel(keys).catch(() => {});
+};
 
 /* extension ------------------------------------------------------------ */
 export default ({ cache }: PrismaRedisCacheConfig) =>
@@ -42,51 +45,43 @@ export default ({ cache }: PrismaRedisCacheConfig) =>
 
           const { cache: cOpt, uncache, ...queryArgs } = args as any;
 
-          const finish = async (res: any) => {
-            const dels = toUncache(uncache, res);
-            if (dels.length) cache.mdel(dels).catch(() => {});
-            return res;
-          };
+          if (cOpt === undefined) {
+            const db = await query(queryArgs);
+            await processUncache(cache, uncache, db);
+            return db;
+          }
 
-          if (cOpt === undefined) return finish(await query(queryArgs));
-
-          /* key + ttl */
           let key: string;
           let ttl: number | undefined;
 
           if (typeof cOpt !== "object" || Array.isArray(cOpt)) {
-            key = typeof cOpt === "string" ? cOpt : hashKey(model, queryArgs);
+            key =
+              typeof cOpt === "string" ? cOpt : composedKey(model, queryArgs);
             if (typeof cOpt === "number") ttl = cOpt;
           } else if (typeof cOpt.key === "function") {
-            const res = await query(queryArgs);
-            await finish(res);
+            const db = await query(queryArgs);
+            await processUncache(cache, uncache, db);
 
-            key = cOpt.key(res);
-            ttl = cOpt.ttl;
-            try {
-              await cache.set(key, res, ttl);
-            } catch {}
-            return res;
+            key = cOpt.key(db);
+            ttl = cOpt.ttl ?? undefined;
+
+            await cache.set(key, db, ttl);
+            return db;
           } else {
-            key = ns(cOpt.key ?? hashKey(model, queryArgs), cOpt.namespace);
-            ttl = cOpt.ttl;
+            key = ns(cOpt.key ?? composedKey(model, queryArgs), cOpt.namespace);
+            ttl = cOpt.ttl ?? undefined;
           }
 
-          /* try cache for reads */
-          if (!WRITE_OPS.has(operation)) {
-            try {
-              const hit = await cache.get(key);
-              if (hit != null) return hit;
-            } catch {}
+          if (!isWrite(operation)) {
+            const hit = await cache.get(key).catch(() => undefined);
+            if (hit !== undefined && hit !== null) return hit;
           }
 
-          /* DB round-trip */
-          const res = await query(queryArgs);
-          await finish(res);
-          try {
-            await cache.set(key, res, ttl);
-          } catch {}
-          return res;
+          const db = await query(queryArgs);
+          await processUncache(cache, uncache, db);
+
+          await cache.set(key, db, ttl);
+          return db;
         },
       },
     },
