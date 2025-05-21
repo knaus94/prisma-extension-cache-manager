@@ -3,185 +3,89 @@ import {
   ModelExtension,
   PrismaRedisCacheConfig,
 } from "./types";
-import { createHash } from "crypto";
+import { hash } from "object-code";
 import { Prisma } from "@prisma/client/extension";
 
-/**
- * Produce a stable cache key from model name and query arguments.
- */
-function generateComposedKey(options: {
-  model: string;
-  queryArgs: any;
-}): string {
-  const hash = createHash("md5")
-    .update(JSON.stringify(options.queryArgs))
-    .digest("hex");
-  return `${options.model}@${hash}`;
-}
+/* helpers -------------------------------------------------------------- */
+const hashKey = (m: string, a: any) => `${m}@${hash(a)}`;
+const ns = (k: string, n?: string) => (n ? `${n}:${k}` : k);
+const WRITE_OPS = new Set([
+  "create",
+  "createMany",
+  "updateMany",
+  "upsert",
+  "update",
+]);
 
-/**
- * Prefix the key with a namespace (if present).
- */
-function createKey(key: string, namespace?: string): string {
-  return namespace ? `${namespace}:${key}` : key;
-}
+const toUncache = (opt: any, res: any): string[] =>
+  !opt
+    ? []
+    : typeof opt === "function"
+      ? Array(opt(res))
+      : typeof opt === "string"
+        ? [opt]
+        : opt.map((o: any) =>
+            typeof o === "string" ? o : ns(o.key, o.namespace)
+          );
 
-/**
- * Delete keys from cache after a write operation.
- */
-async function processUncache(
-  cache: any,
-  uncacheOption: any,
-  result: any
-): Promise<boolean> {
-  let keysToDelete: string[] = [];
-
-  if (typeof uncacheOption === "function") {
-    const keys = uncacheOption(result);
-    keysToDelete = Array.isArray(keys) ? keys : [keys];
-  } else if (typeof uncacheOption === "string") {
-    keysToDelete = [uncacheOption];
-  } else if (Array.isArray(uncacheOption)) {
-    if (typeof uncacheOption[0] === "string") {
-      keysToDelete = uncacheOption;
-    } else if (typeof uncacheOption[0] === "object") {
-      keysToDelete = uncacheOption.map((obj: any) =>
-        obj.namespace ? `${obj.namespace}:${obj.key}` : obj.key
-      );
-    }
-  }
-
-  if (keysToDelete.length === 0) return true;
-
-  try {
-    await cache.mdel(keysToDelete);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Decide whether cache option is valid.
- */
-const shouldUseCache = (opt: any) =>
-  opt !== undefined &&
-  ["boolean", "object", "number", "string"].includes(typeof opt);
-
-/**
- * Decide whether uncache option is valid.
- */
-const shouldUseUncache = (opt: any) =>
-  opt !== undefined &&
-  (typeof opt === "function" || typeof opt === "string" || Array.isArray(opt));
-
-/**
- * Prisma extension that adds transparent Redis caching.
- */
-export default ({ cache, debug, ttl: defaultTTL }: PrismaRedisCacheConfig) =>
+/* extension ------------------------------------------------------------ */
+export default ({ cache }: PrismaRedisCacheConfig) =>
   Prisma.defineExtension({
     name: "prisma-extension-cache-manager",
-    client: {
-      $cache: cache,
-    },
-    model: {
-      $allModels: {} as ModelExtension,
-    },
+    client: { $cache: cache },
+    model: { $allModels: {} as ModelExtension },
     query: {
       $allModels: {
         async $allOperations({ model, operation, args, query }) {
-          if (!(CACHE_OPERATIONS as unknown as string[]).includes(operation)) {
+          if (!(CACHE_OPERATIONS as readonly string[]).includes(operation))
             return query(args);
-          }
 
-          const isWriteOp = [
-            "create",
-            "createMany",
-            "updateMany",
-            "upsert",
-            "update",
-          ].includes(operation);
+          const { cache: cOpt, uncache, ...queryArgs } = args as any;
 
-          const {
-            cache: cacheOption,
-            uncache: uncacheOption,
-            ...queryArgs
-          } = args as any;
-
-          const useCache = shouldUseCache(cacheOption);
-          const useUncache = shouldUseUncache(uncacheOption);
-
-          // --- No cache requested -----------------------------------------
-          if (!useCache) {
-            const res = await query(queryArgs);
-            if (useUncache) await processUncache(cache, uncacheOption, res);
+          const finish = async (res: any) => {
+            const dels = toUncache(uncache, res);
+            if (dels.length) cache.mdel(dels).catch(() => {});
             return res;
-          }
+          };
 
-          // --- Build key & ttl --------------------------------------------
-          let cacheKey: string;
+          if (cOpt === undefined) return finish(await query(queryArgs));
+
+          /* key + ttl */
+          let key: string;
           let ttl: number | undefined;
 
-          if (["boolean", "number", "string"].includes(typeof cacheOption)) {
-            cacheKey =
-              typeof cacheOption === "string"
-                ? cacheOption
-                : generateComposedKey({ model, queryArgs });
-
-            ttl = typeof cacheOption === "number" ? cacheOption : undefined;
-          } else if (typeof cacheOption.key === "function") {
-            // Key depends on DB result – run query first
+          if (typeof cOpt !== "object" || Array.isArray(cOpt)) {
+            key = typeof cOpt === "string" ? cOpt : hashKey(model, queryArgs);
+            if (typeof cOpt === "number") ttl = cOpt;
+          } else if (typeof cOpt.key === "function") {
             const res = await query(queryArgs);
-            if (useUncache) await processUncache(cache, uncacheOption, res);
+            await finish(res);
 
-            cacheKey = cacheOption.key(res);
-            ttl = cacheOption.ttl ?? defaultTTL;
-
-            if (ttl && ttl > 0) {
-              await cache.set(cacheKey, res, Math.ceil(ttl / 1000));
-            } else {
-              await cache.set(cacheKey, res);
-            }
-            if (debug) console.log("Data cached (fn key):", cacheKey);
+            key = cOpt.key(res);
+            ttl = cOpt.ttl; // как есть
+            try {
+              await cache.set(key, res, ttl);
+            } catch {}
             return res;
           } else {
-            cacheKey =
-              createKey(cacheOption.key, cacheOption.namespace) ||
-              generateComposedKey({ model, queryArgs });
-            ttl = cacheOption.ttl;
+            key = ns(cOpt.key ?? hashKey(model, queryArgs), cOpt.namespace);
+            ttl = cOpt.ttl;
           }
 
-          // --- Try cache for read ops -------------------------------------
-          if (!isWriteOp) {
+          /* try cache for reads */
+          if (!WRITE_OPS.has(operation)) {
             try {
-              const cached = await cache.get(cacheKey);
-              if (cached !== undefined && cached !== null) {
-                if (debug) console.log("Cache hit:", cacheKey);
-                return cached;
-              }
-              if (debug) console.log("Cache miss:", cacheKey);
-            } catch (e) {
-              if (debug) console.error("Cache get failed", e);
-            }
+              const hit = await cache.get(key);
+              if (hit != null) return hit;
+            } catch {}
           }
 
-          // --- Fallback to DB ---------------------------------------------
+          /* DB round-trip */
           const res = await query(queryArgs);
-
-          if (useUncache) await processUncache(cache, uncacheOption, res);
-
-          ttl = ttl ?? defaultTTL;
+          await finish(res);
           try {
-            if (ttl && ttl > 0) {
-              await cache.set(cacheKey, res, Math.ceil(ttl / 1000));
-            } else {
-              await cache.set(cacheKey, res);
-            }
-            if (debug) console.log("Data cached:", cacheKey);
-          } catch (e) {
-            if (debug) console.error("Cache set failed", e);
-          }
-
+            await cache.set(key, res, ttl);
+          } catch {}
           return res;
         },
       },
