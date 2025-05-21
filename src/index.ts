@@ -62,7 +62,7 @@ export default ({ cache }: PrismaRedisCacheConfig) =>
             await finish(res);
 
             key = cOpt.key(res);
-            ttl = cOpt.ttl; // как есть
+            ttl = cOpt.ttl;
             try {
               await cache.set(key, res, ttl);
             } catch {}
