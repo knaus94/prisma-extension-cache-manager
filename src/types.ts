@@ -1,5 +1,5 @@
-import { Operation } from "@prisma/client/runtime/library";
 import { Prisma } from "@prisma/client/extension";
+import { Operation } from "@prisma/client/runtime/client";
 import { Cache } from "cache-manager";
 
 export const REQUIRED_ARGS_OPERATIONS = [
