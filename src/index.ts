@@ -37,19 +37,10 @@ const toUncache = (opt: any, res: any): string[] => {
     .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 };
 
-const deleteMany = async (cache: KeyvValkey, keys: string[]) => {
-  if (!keys.length) return;
-  if (typeof cache.deleteMany === "function") {
-    await cache.deleteMany(keys);
-    return;
-  }
-
-  await Promise.all(keys.map((key) => cache.delete(key)));
-};
-
 const processUncache = async (cache: KeyvValkey, opt: any, res: any) => {
   const keys = toUncache(opt, res);
-  await deleteMany(cache, keys).catch(() => {});
+  if (!keys.length) return;
+  await cache.deleteMany(keys).catch(() => {});
 };
 
 const isCacheHit = (value: unknown) => value !== undefined;
