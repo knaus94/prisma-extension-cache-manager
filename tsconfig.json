@@ -12,7 +12,8 @@
     "noUnusedParameters": true,
     "outDir": "./dist",
     "paths": {
-      "~/*": ["./src/*"]
+      "~/*": ["./src/*"],
+      "cache-manager": ["./src/cache-manager-types"]
     },
     "resolveJsonModule": true,
     "sourceMap": false,

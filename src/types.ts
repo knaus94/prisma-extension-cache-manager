@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client/extension";
-import type KeyvValkey from "@keyv/valkey";
+import type { Cache } from "cache-manager";
 
 export const REQUIRED_ARGS_OPERATIONS = [
   "delete",
@@ -81,7 +81,7 @@ export interface PrismaCacheArgs<
 }
 
 export interface PrismaRedisCacheConfig {
-  cache: KeyvValkey;
+  cache: Cache;
   lock?:
     | false
     | {

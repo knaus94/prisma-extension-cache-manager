@@ -5,7 +5,7 @@ import {
   PrismaRedisCacheConfig,
 } from "./types";
 import { Prisma } from "@prisma/client/extension";
-import type KeyvValkey from "@keyv/valkey";
+import type { Cache } from "cache-manager";
 
 /* helpers -------------------------------------------------------------- */
 const composedKey = (m: string, a: any) => `${m}@${hash(a)}`;
@@ -37,16 +37,16 @@ const toUncache = (opt: any, res: any): string[] => {
     .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 };
 
-const processUncache = async (cache: KeyvValkey, opt: any, res: any) => {
+const processUncache = async (cache: Cache, opt: any, res: any) => {
   const keys = toUncache(opt, res);
   if (!keys.length) return;
-  await cache.deleteMany(keys).catch(() => {});
+  await cache.mdel(keys).catch(() => {});
 };
 
 const isCacheHit = (value: unknown) => value !== undefined;
-const safeGet = async (cache: KeyvValkey, key: string) =>
+const safeGet = async (cache: Cache, key: string) =>
   cache.get(key).catch(() => undefined);
-const safeSet = async (cache: KeyvValkey, key: string, value: unknown, ttl?: number) =>
+const safeSet = async (cache: Cache, key: string, value: unknown, ttl?: number) =>
   cache.set(key, value, ttl).catch(() => {});
 
 type RedisLockClient = {
@@ -58,14 +58,21 @@ type RedisLockClient = {
   eval(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
 };
 
-const resolveRedisLockClient = (cache: KeyvValkey): RedisLockClient | undefined => {
-  const redis = cache.redis as unknown;
-  if (!redis || typeof redis !== "object") return undefined;
+const resolveRedisLockClient = (cache: Cache): RedisLockClient | undefined => {
+  const stores = Array.isArray(cache.stores) ? cache.stores : [];
+  for (const keyv of stores) {
+    const store = (keyv as { store?: unknown }).store;
+    if (!store || typeof store !== "object") continue;
 
-  const candidate = redis as { set?: unknown; eval?: unknown };
-  return typeof candidate.set === "function" && typeof candidate.eval === "function"
-    ? (redis as RedisLockClient)
-    : undefined;
+    const redis = (store as { redis?: unknown }).redis;
+    if (!redis || typeof redis !== "object") continue;
+
+    const candidate = redis as { set?: unknown; eval?: unknown };
+    if (typeof candidate.set === "function" && typeof candidate.eval === "function") {
+      return redis as RedisLockClient;
+    }
+  }
+  return undefined;
 };
 
 type LockOptions = {
@@ -140,7 +147,7 @@ const releaseLock = async (
 };
 
 const waitForCacheFill = async (
-  cache: KeyvValkey,
+  cache: Cache,
   key: string,
   options: LockOptions
 ) => {
@@ -185,6 +192,11 @@ export default ({ cache, lock }: PrismaRedisCacheConfig) => {
   const inflight = new Map<string, Promise<unknown>>();
   const lockOptions = resolveLockOptions(lock);
   const redis = resolveRedisLockClient(cache);
+  if (lockOptions.enabled && !redis) {
+    throw new Error(
+      "Distributed lock is enabled, but no Valkey/Redis store was found at cache.stores[*].store.redis"
+    );
+  }
 
   const runSingleFlight = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     const pending = inflight.get(key) as Promise<T> | undefined;
