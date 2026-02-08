@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client/extension";
-import { Operation } from "@prisma/client/runtime/client";
-import { Cache } from "cache-manager";
+import type KeyvValkey from "@keyv/valkey";
 
 export const REQUIRED_ARGS_OPERATIONS = [
   "delete",
@@ -13,13 +12,13 @@ export const REQUIRED_ARGS_OPERATIONS = [
   "create",
   "createMany",
   "updateMany",
-] as const satisfies ReadonlyArray<Operation>;
+] as const;
 export const OPTIONAL_ARGS_OPERATIONS = [
   "findMany",
   "findFirst",
   "findFirstOrThrow",
   "count",
-] as const satisfies ReadonlyArray<Operation>;
+] as const;
 
 export const CACHE_OPERATIONS = [
   ...REQUIRED_ARGS_OPERATIONS,
@@ -82,5 +81,15 @@ export interface PrismaCacheArgs<
 }
 
 export interface PrismaRedisCacheConfig {
-  cache: Cache;
+  cache: KeyvValkey;
+  lock?:
+    | false
+    | {
+        enabled?: boolean;
+        prefix?: string;
+        ttl?: number;
+        waitTimeout?: number;
+        retryDelay?: number;
+        retryJitter?: number;
+      };
 }

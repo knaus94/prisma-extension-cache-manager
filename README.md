@@ -1,70 +1,96 @@
 # @knaus94/prisma-extension-cache-manager
 
-A caching extension for [Prisma](https://www.prisma.io/), compatible with [cache-manager](https://www.npmjs.com/package/cache-manager).
+A caching extension for [Prisma](https://www.prisma.io/) with [@keyv/valkey](https://www.npmjs.com/package/@keyv/valkey).
 
 ## Features
 
-- [cache-manager](https://www.npmjs.com/package/cache-manager) compatibility
+- `@keyv/valkey` compatibility
 - Only model queries can be cacheable (no $query or $queryRaw)
+- Cache stampede protection:
+  - Local in-flight deduplication (single process)
+  - Distributed lock via Valkey/Redis (`SET NX PX`) for multi-instance apps
 
 ## Installation
 
 Install:
 
 ```
-npm i @knaus94/prisma-extension-cache-manager
+npm i @knaus94/prisma-extension-cache-manager keyv @keyv/valkey
 ```
 
 ## Usage
 
 ```typescript
 import { PrismaClient } from "@prisma/client";
-import * as cm from "cache-manager";
+import KeyvValkey from "@keyv/valkey";
 import cacheExtension from "@knaus94/prisma-extension-cache-manager";
 
 async function main() {
-  const cache = await cm.caching("memory", {
-    ttl: 10000,
-    max: 200,
-  });
-  const prisma = new PrismaClient().$extends(cacheExtension({ cache }));
+  const cache = new KeyvValkey("redis://localhost:6379");
+  const prisma = new PrismaClient().$extends(
+    cacheExtension({
+      cache,
+      lock: {
+        ttl: 5000,
+        waitTimeout: 2000,
+        retryDelay: 40,
+        retryJitter: 20,
+        prefix: "prisma-cache-lock",
+      },
+    })
+  );
+
   await prisma.user.findUniqueOrThrow({
     where: {
       email: user.email,
     },
-    cache: true, // using cache default settings
+    cache: true,
   });
+
   await prisma.user.findMany({
-    cache: 5000, // setting ttl in milliseconds
+    cache: 5000,
   });
+
   await prisma.user.count({
     cache: {
       ttl: 2000,
-      key: "user_count", // custom cache key
+      key: "user_count",
     },
   });
+
   await prisma.user.update({
     data: {},
     cache: {
       ttl: 2000,
-      key: (result) => `user-${user.id}`, // custom cache key by result (There will be no reading from the cache, only a write down)
+      key: (result) => `user-${user.id}`,
     },
   });
+
   await prisma.user.create({
     data: {},
-    uncache: `user_count`, // delete key from cache
+    uncache: `user_count`,
   });
+
   await prisma.user.create({
     data: {},
     cache: {
       ttl: 2000,
-      key: (result) => `user-${user.id}`, // custom cache key by result (There will be no reading from the cache, only a write down)
+      key: (result) => `user-${user.id}`,
     },
-    uncache: [`user_count`, `users`], // delete keys from cache
+    uncache: [`user_count`, `users`],
   });
 }
 
 main().catch(console.error);
+```
+
+Disable distributed lock if needed:
+
+```typescript
+cacheExtension({
+  cache,
+  lock: false,
+});
 ```
 
 ## Learn more
