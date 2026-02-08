@@ -96,7 +96,7 @@ main().catch(console.error);
 ```
 
 For distributed lock, extension will use the first store with a Redis client at `cache.stores[*].store.redis`.
-If lock is enabled and such store is not found, extension throws during initialization.
+If such store is missing, extension automatically falls back to local in-process single-flight.
 
 Disable distributed lock if needed:
 

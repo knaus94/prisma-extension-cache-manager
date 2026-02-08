@@ -192,11 +192,6 @@ export default ({ cache, lock }: PrismaRedisCacheConfig) => {
   const inflight = new Map<string, Promise<unknown>>();
   const lockOptions = resolveLockOptions(lock);
   const redis = resolveRedisLockClient(cache);
-  if (lockOptions.enabled && !redis) {
-    throw new Error(
-      "Distributed lock is enabled, but no Valkey/Redis store was found at cache.stores[*].store.redis"
-    );
-  }
 
   const runSingleFlight = async <T>(key: string, fn: () => Promise<T>): Promise<T> => {
     const pending = inflight.get(key) as Promise<T> | undefined;
